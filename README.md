@@ -1,4 +1,4 @@
-# tmux-sessionizer (tms)
+# tmux-sessionizer (jelly)
 
 The fastest way to manage projects as tmux sessions
 
@@ -16,70 +16,70 @@ Tmux has keybindings built-in to allow you to switch between sessions. By defaul
 
 Switching between windows is done by default with `leader-p` and `leader-n`
 
-![tms-gif](images/tms-v0_1_1.gif)
+![jelly-gif](images/tms-v0_1_1.gif)
 
 ## Usage
 
-### The `tms` command
+### The `jelly` command
 
-Running `tms` will find the repos and fuzzy find on them. It is very convenient to bind the tms
+Running `jelly` will find the repos and fuzzy find on them. It is very convenient to bind the jelly
 command to a tmux keybinding so that you don't have to leave your text editor to open a new project.
-I have this tmux binding `bind C-o display-popup -E "tms"`. See the image below for what this look
-like with the `tms switch` keybinding
+I have this tmux binding `bind C-o display-popup -E "jelly"`. See the image below for what this look
+like with the `jelly switch` keybinding
 
-### The `tms switch` command
+### The `jelly switch` command
 
-There is also the `tms switch` command that will show other active sessions with a fuzzy finder and
+There is also the `jelly switch` command that will show other active sessions with a fuzzy finder and
 a preview window. This can be very useful when used with the tmux `display-popup` which can open a
 popup window above the current session. That popup window with a command can have a keybinding. The
-config could look like this `bind C-j display-popup -E "tms switch"`. Then when using leader+C-j the
+config could look like this `bind C-j display-popup -E "jelly switch"`. Then when using leader+C-j the
 popup is displayed (and it's fast)
 
-![tms-switch](images/tms_switch-v2_1.png)
+![jelly-switch](images/tms_switch-v2_1.png)
 
-### The `tms windows` command
+### The `jelly windows` command
 
-Similar to `tms switch`, you can show other active windows in the current session with a fuzzy
+Similar to `jelly switch`, you can show other active windows in the current session with a fuzzy
 finder and a preview window. A config for use with `display-popup`, could look like this
-`bind C-w display-popup -E "tms windows"`.
+`bind C-w display-popup -E "jelly windows"`.
 
-### The `tms rename` command
+### The `jelly rename` command
 
 Using this command you can automatically rename the active session along with the directory name and
 the active directory inside all the panes in the active session will be changed to the renamed
 directory
 
-`tms rename <new_session_name>`
+`jelly rename <new_session_name>`
 
-`bind C-w command-prompt -p "Rename active session to: " "run-shell 'tms rename %1'"`.
+`bind C-w command-prompt -p "Rename active session to: " "run-shell 'jelly rename %1'"`.
 
-### The `tms refresh` command
+### The `jelly refresh` command
 
 Using this command you can automatically generate missing worktree windows for the active session or
 a provided `session_name`.
 
-`tms refresh <session_name>`
+`jelly refresh <session_name>`
 
-`bind C-r "run-shell 'tms refresh'"`.
+`bind C-r "run-shell 'jelly refresh'"`.
 
-### The `tms kill` command
+### The `jelly kill` command
 
 Using this command you can kill current tmux session and automatically jump to another. The config
-could look like this `bind C-k confirm -p "Kill current session? (y/N):" "run-shell 'tms kill'"`.
+could look like this `bind C-k confirm -p "Kill current session? (y/N):" "run-shell 'jelly kill'"`.
 Then when using leader+C-k you have to confirm killing of the current session with `y`. Any other
 input or just pressing enter aborts it.
 
-With `tms config --session <name>` you can define to which session you will switch to after the
+With `jelly config --session <name>` you can define to which session you will switch to after the
 kill.
 
 ### CLI overview
 
-Use `tms --help`
+Use `jelly --help`
 
 ```
 Scan for all git folders in specified directorires, select one and open it as a new tmux session
 
-Usage: tms [COMMAND]
+Usage: jelly [COMMAND]
 
 Commands:
   config        Configure the defaults for search paths and excluded directories
@@ -88,6 +88,7 @@ Commands:
   windows       Display the current session's windows with a fuzzy finder and a preview window
   kill          Kill the current tmux session and jump to another
   sessions      Show running tmux sessions with asterisk on the current session
+  save          Snapshot all live tmux sessions so they can be lazily restored later
   rename        Rename the active session and the working directory
   refresh       Creates new worktree windows for the selected session
   clone-repo    Clone repository and create a new session for it
@@ -107,7 +108,7 @@ Options:
 ```
 Configure the defaults for search paths and excluded directories
 
-Usage: tms config [OPTIONS]
+Usage: jelly config [OPTIONS]
 
 Options:
   -p, --paths <search paths>...
@@ -140,23 +141,85 @@ Options:
           Color of the prompt in the picker
       --session-sort-order <Alphabetical | LastAttach>
           Set the sort order of the sessions in the switch command [possible values: Alphabetical, LastAttached]
+      --worktree-sessions <true | false>
+          Show each git worktree as its own session named [repo]-[branch] [possible values: true, false]
+      --lazy-restore <true | false>
+          Lazy session restore [possible values: true, false]
+      --save-interval <minutes>
+          Minutes between automatic background session snapshots (0 disables it)
   -h, --help
           Print help
 ```
 
+#### Worktree sessions
+
+By default `jelly` opens a repository's git worktrees as windows inside that
+repository's session. With `jelly config --worktree-sessions true` each worktree
+instead appears in the picker as its own session named `[repo]-[branch]`, so you
+can jump straight to a specific worktree. The repository itself still appears as
+a plain `[repo]` entry. When this option is off, behavior is unchanged.
+
+#### Lazy session restore
+
+`jelly config --lazy-restore true` makes `jelly` remember and restore tmux
+sessions itself — no plugins required.
+
+While enabled, jelly snapshots the layout of all live tmux sessions (window
+names, pane working directories, and pane layout) to
+`~/.local/state/jelly/sessions/`. Snapshots happen on every `jelly` run, on
+demand with `jelly save`, and — so state stays fresh between runs — from a
+background helper that jelly starts automatically and that snapshots every
+`save_interval` minutes (default 15; set `jelly config --save-interval 0` to
+disable it). The helper runs at most one copy at a time and exits when the tmux
+server does. For an extra snapshot the instant a session closes, add the
+recommended `session-closed` hook (see below).
+
+Selecting a session that is not currently running recreates it from its saved
+snapshot — just that one session — instead of starting empty. The first `jelly`
+run after a reboot additionally closes every open tmux session, giving a clean
+slate so sessions come back one at a time as you pick them.
+
+When this option is off, behavior is unchanged.
+
+> Note: the post-reboot clean slate closes all sessions. If you run `jelly` from
+> inside tmux, the session you are attached to is left open so `jelly` is not
+> terminated.
+
+##### Recommended: snapshot when a session closes
+
+The background helper only refreshes snapshots every `save_interval` minutes. To
+also capture one the instant any session closes — keeping saved state current
+right up to server shutdown — add a `session-closed` hook to your `tmux.conf`,
+alongside the `jelly` keybindings:
+
+```tmux
+# jelly keybindings
+bind C-o display-popup -E "jelly"
+bind C-j display-popup -E "jelly switch"
+bind C-w display-popup -E "jelly windows"
+
+# snapshot sessions the moment one closes (lazy restore)
+set-hook -g session-closed 'run-shell -b "jelly save"'
+```
+
+jelly does not install this hook automatically; like the keybindings, it is left
+as explicit tmux configuration. When the *last* session closes the tmux server
+exits immediately, so that final session falls back to its last interval
+snapshot.
+
 #### Config file location
 
-By default, tms looks for a configuration in the platform-specific config directory:
+By default, jelly looks for a configuration in the platform-specific config directory:
 
 ```
-Linux: /home/alice/.config/tms/config.toml
-macOS: /Users/Alice/Library/Application Support/tms/config.toml
-Windows: C:\Users\Alice\AppData\Roaming\tms\config.toml
+Linux: /home/alice/.config/jelly/config.toml
+macOS: /Users/Alice/Library/Application Support/jelly/config.toml
+Windows: C:\Users\Alice\AppData\Roaming\jelly\config.toml
 ```
 
-If the config directory can't be found, it will also check `~/.config/tms/config.toml` (only
+If the config directory can't be found, it will also check `~/.config/jelly/config.toml` (only
 relevant on Windows and macOS). Alternatively, you can specify a custom config location by setting
-the `TMS_CONFIG_FILE` environment variable in your shell profile with your desired config path.
+the `JELLY_CONFIG_FILE` environment variable in your shell profile with your desired config path.
 
 #### Customizing keyboard shortcuts
 
@@ -204,11 +267,11 @@ Clone the repository and install using `cargo install --path . --force`
 
 ## Usage Notes
 
-The 'tms sessions' command can be used to get a styled output of the active sessions with an
+The 'jelly sessions' command can be used to get a styled output of the active sessions with an
 asterisk on the current session. The configuration would look something like this
 
 ```
-set -g status-right " #(tms sessions)"
+set -g status-right " #(jelly sessions)"
 ```
 
 E.g. ![tmux status bar](images/tmux-status-bar.png) If this configuration is used it can be helpful
@@ -224,15 +287,15 @@ bind -r ')' switch-client -n\; refresh-client -S
 
 ### Bash
 ```bash
-echo "source <(COMPLETE=bash tms)" >> ~/.bashrc
+echo "source <(COMPLETE=bash jelly)" >> ~/.bashrc
 ```
 
 ### Zsh
 ```zsh
-echo "source <(COMPLETE=zsh tms)" >> ~/.zshrc
+echo "source <(COMPLETE=zsh jelly)" >> ~/.zshrc
 ```
 
 ### Fish
 ```fish
-echo "COMPLETE=fish tms | source" >> ~/.config/fish/config.fish
+echo "COMPLETE=fish jelly | source" >> ~/.config/fish/config.fish
 ```

@@ -4,7 +4,7 @@ use clap::{CommandFactory, Parser};
 use clap_complete::CompleteEnv;
 use error_stack::Report;
 
-use tms::{
+use jelly::{
     cli::{Cli, SubCommandGiven},
     configs::SessionSortOrderConfig,
     error::{Result, Suggestion},
@@ -23,7 +23,7 @@ fn main() -> Result<()> {
     let bin_name = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.file_name().map(|exe| exe.to_string_lossy().to_string()))
-        .unwrap_or("tms".into());
+        .unwrap_or("jelly".into());
     match CompleteEnv::with_factory(Cli::command)
         .bin(bin_name)
         .try_complete(env::args_os(), None)
@@ -45,11 +45,19 @@ fn main() -> Result<()> {
         SubCommandGiven::No(config) => config, // continue
     };
 
+    // Snapshot live sessions so they can be restored later, then — on the first run
+    // after a reboot (when `lazy_restore` is enabled) — close all open tmux sessions
+    // so selecting one below restores just that session.
+    if config.lazy_restore.unwrap_or(false) {
+        jelly::persist::save_all_sessions(&tmux);
+    }
+    jelly::persist::handle_first_run(&config, &tmux);
+
     let sessions = create_sessions(&config)?;
     let (session_strings, active_sessions) = get_session_list(&sessions, &config, &tmux);
 
     // Create picker with active session styling
-    let mut picker = tms::picker::Picker::new(
+    let mut picker = jelly::picker::Picker::new(
         &session_strings,
         None,
         config.shortcuts.as_ref(),
@@ -69,6 +77,10 @@ fn main() -> Result<()> {
     };
 
     if let Some(session) = sessions.find_session(&selected_str) {
+        // Ensure the background interval-saver is running before handing off.
+        if config.lazy_restore.unwrap_or(false) {
+            jelly::persist::ensure_save_daemon(&config);
+        }
         session.switch_to(&tmux, &config)?;
     }
 
@@ -79,7 +91,7 @@ fn main() -> Result<()> {
 /// Returns (session_list, active_sessions_set)
 fn get_session_list(
     sessions: &impl SessionContainer,
-    config: &tms::configs::Config,
+    config: &jelly::configs::Config,
     tmux: &Tmux,
 ) -> (Vec<String>, Option<HashSet<String>>) {
     let all_sessions = sessions.list();

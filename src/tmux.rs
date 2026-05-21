@@ -16,7 +16,7 @@ pub struct Tmux {
 
 impl Default for Tmux {
     fn default() -> Self {
-        let socket_name = env::var("TMS_TMUX_SOCKET")
+        let socket_name = env::var("JELLY_TMUX_SOCKET")
             .ok()
             .unwrap_or(String::from("default"));
 
@@ -144,11 +144,11 @@ impl Tmux {
             Some(sessions) => match sessions.get(session_name) {
                 Some(session) => match &session.create_script {
                     Some(create_script) => create_script.to_owned(),
-                    None => path.join(".tms-create"),
+                    None => path.join(".jelly-create"),
                 },
-                None => path.join(".tms-create"),
+                None => path.join(".jelly-create"),
             },
-            None => path.join(".tms-create"),
+            None => path.join(".jelly-create"),
         };
 
         self.run_session_script(&command_path, session_name)
@@ -235,6 +235,31 @@ impl Tmux {
     pub fn display_message(&self, format: &str) -> String {
         let output = self.execute_tmux_command(&["display-message", "-p", format]);
         Tmux::stdout_to_string(output)
+    }
+
+    /// List every pane across every session with the given format string.
+    pub fn list_all_panes(&self, format: &str) -> String {
+        let output = self.execute_tmux_command(&["list-panes", "-a", "-F", format]);
+        Tmux::stdout_to_string(output)
+    }
+
+    /// Rename the current window of `target` (a session name).
+    pub fn rename_window(&self, target: &str, name: &str) -> process::Output {
+        self.execute_tmux_command(&["rename-window", "-t", target, name])
+    }
+
+    /// Split the current window of `target` (a session name), optionally in `path`.
+    pub fn split_window(&self, target: &str, path: Option<&str>) -> process::Output {
+        let mut args = vec!["split-window", "-t", target];
+        if let Some(path) = path {
+            args.extend(["-c", path]);
+        }
+        self.execute_tmux_command(&args)
+    }
+
+    /// Apply a saved layout to the current window of `target` (a session name).
+    pub fn select_layout(&self, target: &str, layout: &str) -> process::Output {
+        self.execute_tmux_command(&["select-layout", "-t", target, layout])
     }
 
     pub fn refresh_client(&self) -> process::Output {

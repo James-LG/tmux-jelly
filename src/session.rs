@@ -61,9 +61,19 @@ impl Session {
         };
         let session_name = self.name.replace('.', "_");
 
-        if !tmux.session_exists(&session_name) {
+        // Feature 2: restore this single session from its saved state if possible;
+        // otherwise create it fresh.
+        if !tmux.session_exists(&session_name)
+            && !crate::persist::try_restore_session(&session_name, config, tmux)
+        {
             tmux.new_session(Some(&session_name), Some(&path));
-            tmux.set_up_tmux_env(repo, &session_name)?;
+            // Feature 1: a worktree session owns exactly one worktree, so skip the
+            // worktree-window setup that would otherwise add every sibling worktree.
+            let is_worktree_session =
+                config.worktree_sessions.unwrap_or(false) && repo.is_worktree();
+            if !is_worktree_session {
+                tmux.set_up_tmux_env(repo, &session_name)?;
+            }
             tmux.run_session_create_script(self.path(), &session_name, config)?;
         }
 
@@ -75,7 +85,9 @@ impl Session {
     fn switch_to_bookmark_session(&self, tmux: &Tmux, path: &Path, config: &Config) -> Result<()> {
         let session_name = self.name.replace('.', "_");
 
-        if !tmux.session_exists(&session_name) {
+        if !tmux.session_exists(&session_name)
+            && !crate::persist::try_restore_session(&session_name, config, tmux)
+        {
             tmux.new_session(Some(&session_name), path.to_str());
             tmux.run_session_create_script(path, &session_name, config)?;
         }
@@ -84,6 +96,15 @@ impl Session {
 
         Ok(())
     }
+}
+
+/// Compose the picker/session name for a worktree as `[repo]-[branch]`.
+///
+/// Characters that tmux forbids in session targets (`.` and `:`) are normalized
+/// to `_`; `/` is left intact since tmux accepts it and it keeps branch names
+/// such as `feature/foo` readable.
+pub fn worktree_session_name(repo: &str, branch: &str) -> String {
+    format!("{repo}-{branch}").replace(['.', ':'], "_")
 }
 
 pub trait SessionContainer {
@@ -265,5 +286,18 @@ mod tests {
         assert_eq!(deduplicated[0].name, "projects/proj2/test");
         assert_eq!(deduplicated[1].name, "to/proj2/test");
         assert_eq!(deduplicated[2].name, "to/proj1/test");
+    }
+
+    #[test]
+    fn worktree_session_name_normalizes_tmux_unsafe_chars() {
+        // Plain case: `[repo]-[branch]`.
+        assert_eq!(worktree_session_name("myrepo", "main"), "myrepo-main");
+        // `/` is kept since tmux accepts it and it keeps branch names readable.
+        assert_eq!(
+            worktree_session_name("myrepo", "feature/foo"),
+            "myrepo-feature/foo"
+        );
+        // `.` and `:` are forbidden in tmux session targets, so they are normalized.
+        assert_eq!(worktree_session_name("my.repo", "v1.2"), "my_repo-v1_2");
     }
 }

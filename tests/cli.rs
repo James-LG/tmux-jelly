@@ -3,20 +3,20 @@ use pretty_assertions::assert_eq;
 use ratatui::style::Color;
 use std::{fs, str::FromStr};
 use tempfile::tempdir;
-use tms::configs::{
+use jelly::configs::{
     CloneRepoSwitchConfig, Config, PickerColorConfig, SearchDirectory, SessionSortOrderConfig,
 };
 
 #[test]
-fn tms_fails_with_missing_config() -> anyhow::Result<()> {
+fn jelly_fails_with_missing_config() -> anyhow::Result<()> {
     let dir = tempdir()?;
     let file_path = dir.path().join("config.toml");
 
-    let mut tms = Command::cargo_bin("tms")?;
+    let mut jelly = Command::cargo_bin("jelly")?;
 
-    tms.env("TMS_CONFIG_FILE", file_path);
+    jelly.env("JELLY_CONFIG_FILE", file_path);
 
-    tms.assert()
+    jelly.assert()
         .failure()
         .code(1)
         .stderr(predicates::str::contains("Error"))
@@ -28,7 +28,7 @@ fn tms_fails_with_missing_config() -> anyhow::Result<()> {
 }
 
 #[test]
-fn tms_config() -> anyhow::Result<()> {
+fn jelly_config() -> anyhow::Result<()> {
     let directory = tempdir()?;
     let config_file_path = directory.path().join("config.toml");
 
@@ -69,11 +69,14 @@ fn tms_config() -> anyhow::Result<()> {
         clone_repo_switch: Some(CloneRepoSwitchConfig::Always),
         vcs_providers: None,
         input_position: None,
+        worktree_sessions: None,
+        lazy_restore: None,
+        save_interval: None,
     };
 
-    let mut tms = Command::cargo_bin("tms")?;
+    let mut jelly = Command::cargo_bin("jelly")?;
 
-    tms.env("TMS_CONFIG_FILE", &config_file_path)
+    jelly.env("JELLY_CONFIG_FILE", &config_file_path)
         .arg("config")
         .args([
             "--paths",
@@ -108,13 +111,13 @@ fn tms_config() -> anyhow::Result<()> {
             "Always",
         ]);
 
-    tms.assert().success().code(0);
+    jelly.assert().success().code(0);
 
     let actual_config: Config = toml::from_str(&fs::read_to_string(&config_file_path).unwrap())?;
 
     assert_eq!(
         expected_config, actual_config,
-        "tms config behaves as intended"
+        "jelly config behaves as intended"
     );
 
     Ok(())

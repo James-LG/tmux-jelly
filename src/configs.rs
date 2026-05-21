@@ -54,9 +54,21 @@ pub struct Config {
     pub marks: Option<HashMap<String, String>>,
     pub clone_repo_switch: Option<CloneRepoSwitchConfig>,
     pub vcs_providers: Option<Vec<VcsProviders>>,
+    /// When true, each git worktree is shown in the picker as its own session
+    /// named `[repo]-[branch]` instead of becoming a window in the repo's session.
+    pub worktree_sessions: Option<bool>,
+    /// When true, jelly snapshots live sessions and restores a session's saved layout
+    /// when it is selected; the first run after a reboot also closes all open sessions.
+    pub lazy_restore: Option<bool>,
+    /// Minutes between automatic background snapshots while `lazy_restore` is on
+    /// (`0` disables the background saver). Defaults to `DEFAULT_SAVE_INTERVAL`.
+    pub save_interval: Option<u64>,
 }
 
 pub const DEFAULT_VCS_PROVIDERS: &[VcsProviders] = &[VcsProviders::Git];
+
+/// Default minutes between background session snapshots.
+pub const DEFAULT_SAVE_INTERVAL: u64 = 15;
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -84,6 +96,9 @@ pub struct ConfigExport {
     pub marks: HashMap<String, String>,
     pub clone_repo_switch: CloneRepoSwitchConfig,
     pub vcs_providers: Vec<VcsProviders>,
+    pub worktree_sessions: bool,
+    pub lazy_restore: bool,
+    pub save_interval: u64,
 }
 
 impl From<Config> for ConfigExport {
@@ -111,13 +126,16 @@ impl From<Config> for ConfigExport {
             marks: value.marks.unwrap_or_default(),
             clone_repo_switch: value.clone_repo_switch.unwrap_or_default(),
             vcs_providers: value.vcs_providers.unwrap_or(DEFAULT_VCS_PROVIDERS.into()),
+            worktree_sessions: value.worktree_sessions.unwrap_or_default(),
+            lazy_restore: value.lazy_restore.unwrap_or_default(),
+            save_interval: value.save_interval.unwrap_or(DEFAULT_SAVE_INTERVAL),
         }
     }
 }
 
 impl Config {
     pub(crate) fn new() -> Result<Self> {
-        let config_builder = match env::var("TMS_CONFIG_FILE") {
+        let config_builder = match env::var("JELLY_CONFIG_FILE") {
             Ok(path) => {
                 config::Config::builder().add_source(config::File::with_name(&path).required(false))
             }
@@ -127,24 +145,24 @@ impl Config {
                     let mut config_found = false; // Stores whether a valid config file was found
                     if let Some(home_path) = dirs::home_dir() {
                         config_found = true;
-                        let path = home_path.as_path().join(".config/tms/config.toml");
+                        let path = home_path.as_path().join(".config/jelly/config.toml");
                         builder = builder.add_source(config::File::from(path).required(false));
                     }
                     if let Some(config_path) = dirs::config_dir() {
                         config_found = true;
-                        let path = config_path.as_path().join("tms/config.toml");
+                        let path = config_path.as_path().join("jelly/config.toml");
                         builder = builder.add_source(config::File::from(path).required(false));
                     }
                     if !config_found {
                         return Err(ConfigError::LoadError)
                             .attach_printable("Could not find a valid location for config file (both home and config dirs cannot be found)")
-                            .attach(Suggestion("Try specifying a config file with the TMS_CONFIG_FILE environment variable."));
+                            .attach(Suggestion("Try specifying a config file with the JELLY_CONFIG_FILE environment variable."));
                     }
                     builder
                 }
                 env::VarError::NotUnicode(_) => {
                     return Err(ConfigError::LoadError).attach_printable(
-                        "Invalid non-unicode value for TMS_CONFIG_FILE env variable",
+                        "Invalid non-unicode value for JELLY_CONFIG_FILE env variable",
                     );
                 }
             },
@@ -163,21 +181,21 @@ impl Config {
         let toml_pretty = toml::to_string_pretty(self)
             .change_context(ConfigError::TomlError)?
             .into_bytes();
-        // The TMS_CONFIG_FILE envvar should be set, either by the user or when the config is
+        // The JELLY_CONFIG_FILE envvar should be set, either by the user or when the config is
         // loaded. However, there is a possibility it becomes unset between loading and saving
         // the config. In this case, it will fall back to the platform-specific config folder, and
         // if that can't be found then it's good old ~/.config
-        let path = match env::var("TMS_CONFIG_FILE") {
+        let path = match env::var("JELLY_CONFIG_FILE") {
             Ok(path) => PathBuf::from(path),
             Err(_) => {
                 if let Some(config_path) = dirs::config_dir() {
-                    config_path.as_path().join("tms/config.toml")
+                    config_path.as_path().join("jelly/config.toml")
                 } else if let Some(home_path) = dirs::home_dir() {
-                    home_path.as_path().join(".config/tms/config.toml")
+                    home_path.as_path().join(".config/jelly/config.toml")
                 } else {
                     return Err(ConfigError::LoadError)
                         .attach_printable("Could not find a valid location to write config file (both home and config dirs cannot be found)")
-                        .attach(Suggestion("Try specifying a config file with the TMS_CONFIG_FILE environment variable."));
+                        .attach(Suggestion("Try specifying a config file with the JELLY_CONFIG_FILE environment variable."));
                 }
             }
         };
@@ -185,13 +203,13 @@ impl Config {
             .parent()
             .ok_or(ConfigError::FileWriteError)
             .attach_printable(format!(
-                "Unable to determine parent directory of specified tms config file: {}",
+                "Unable to determine parent directory of specified jelly config file: {}",
                 path.to_str()
                     .unwrap_or("(path could not be converted to string)")
             ))?;
         std::fs::create_dir_all(parent)
             .change_context(ConfigError::FileWriteError)
-            .attach_printable("Unable to create tms config folder")?;
+            .attach_printable("Unable to create jelly config folder")?;
         let mut file = std::fs::File::create(path).change_context(ConfigError::FileWriteError)?;
         file.write_all(&toml_pretty)
             .change_context(ConfigError::FileWriteError)?;
@@ -204,7 +222,7 @@ impl Config {
         {
             return Err(ConfigError::NoDefaultSearchPath)
             .attach_printable(
-                "You must configure at least one default search path with the `config` subcommand. E.g `tms config` ",
+                "You must configure at least one default search path with the `config` subcommand. E.g `jelly config` ",
             );
         }
 
@@ -240,7 +258,7 @@ impl Config {
         if search_dirs.is_empty() {
             return Err(ConfigError::NoValidSearchPath)
             .attach_printable(
-                "You must configure at least one valid search path with the `config` subcommand. E.g `tms config` "
+                "You must configure at least one valid search path with the `config` subcommand. E.g `jelly config` "
             );
         }
 

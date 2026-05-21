@@ -21,7 +21,7 @@ use std::{
 use crate::{
     configs::{Config, SearchDirectory, VcsProviders, DEFAULT_VCS_PROVIDERS},
     dirty_paths::DirtyUtf8Path,
-    session::{Session, SessionContainer, SessionType},
+    session::{worktree_session_name, Session, SessionContainer, SessionType},
     Result, TmsError,
 };
 
@@ -347,6 +347,12 @@ impl RepoProvider {
 pub fn find_repos(config: &Config) -> Result<HashMap<String, Vec<Session>>> {
     let mut repos: HashMap<String, Vec<Session>> = HashMap::new();
 
+    let worktree_sessions = config.worktree_sessions.unwrap_or(false);
+    let vcs_provider_config = config
+        .vcs_providers
+        .clone()
+        .unwrap_or_else(|| DEFAULT_VCS_PROVIDERS.to_vec());
+
     search_dirs(config, |file, repo| {
         if repo.is_worktree() {
             return Ok(());
@@ -360,15 +366,50 @@ pub fn find_repos(config: &Config) -> Result<HashMap<String, Vec<Session>>> {
             })?
             .to_string()?;
 
-        let session = Session::new(session_name, SessionType::Git(repo));
-        if let Some(list) = repos.get_mut(&session.name) {
-            list.push(session);
-        } else {
-            repos.insert(session.name.clone(), vec![session]);
+        // Feature 1: surface each linked worktree as its own `[repo]-[branch]` session.
+        // The parent repo owns this enumeration, so worktree directories encountered
+        // by the directory walk are still skipped above (avoids duplicates).
+        if worktree_sessions {
+            if let Ok(resolved) = repo.resolve() {
+                if let Ok(worktrees) = resolved.worktrees() {
+                    for worktree in worktrees {
+                        if worktree.is_prunable() {
+                            continue;
+                        }
+                        let Ok(worktree_path) = worktree.path() else {
+                            continue;
+                        };
+                        let Ok(provider) =
+                            LazyRepoProvider::new(&worktree_path, &vcs_provider_config)
+                        else {
+                            continue;
+                        };
+                        let branch = provider
+                            .resolve()
+                            .and_then(|repo| repo.head_name())
+                            .unwrap_or_else(|_| worktree.name());
+                        let name = worktree_session_name(&session_name, &branch);
+                        push_repo_session(
+                            &mut repos,
+                            Session::new(name, SessionType::Git(provider)),
+                        );
+                    }
+                }
+            }
         }
+
+        push_repo_session(&mut repos, Session::new(session_name, SessionType::Git(repo)));
         Ok(())
     })?;
     Ok(repos)
+}
+
+fn push_repo_session(repos: &mut HashMap<String, Vec<Session>>, session: Session) {
+    if let Some(list) = repos.get_mut(&session.name) {
+        list.push(session);
+    } else {
+        repos.insert(session.name.clone(), vec![session]);
+    }
 }
 
 fn search_dirs<F>(config: &Config, mut f: F) -> Result<()>

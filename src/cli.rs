@@ -47,6 +47,11 @@ pub enum CliCommand {
     Kill,
     /// Show running tmux sessions with asterisk on the current session
     Sessions,
+    /// Snapshot all live tmux sessions so they can be lazily restored later
+    Save,
+    /// Internal: background loop that snapshots sessions on an interval
+    #[command(hide = true)]
+    SaveLoop,
     #[command(arg_required_else_help = true)]
     /// Rename the active session and the working directory
     Rename(RenameCommand),
@@ -141,6 +146,17 @@ pub struct ConfigArgs {
     /// When set to `Foreground`, the new session will only be opened in the background if the active
     /// tmux session has changed since starting the clone process (for long clone processes on larger repos)
     clone_repo_switch: Option<CloneRepoSwitchConfig>,
+    #[arg(long, value_name = "true | false")]
+    /// Show each git worktree as its own session named `[repo]-[branch]`
+    worktree_sessions: Option<bool>,
+    #[arg(long, value_name = "true | false", verbatim_doc_comment)]
+    /// Lazy session restore
+    /// jelly snapshots live sessions; selecting one restores its saved layout. The
+    /// first run after a reboot also closes all open tmux sessions for a clean slate
+    lazy_restore: Option<bool>,
+    #[arg(long, value_name = "minutes")]
+    /// Minutes between automatic background session snapshots (0 disables it)
+    save_interval: Option<u64>,
 }
 
 #[derive(Debug, Args)]
@@ -219,6 +235,18 @@ impl Cli {
             // session
             Some(CliCommand::Sessions) => {
                 sessions_subcommand(tmux)?;
+                Ok(SubCommandGiven::Yes)
+            }
+
+            // Snapshot all live sessions for lazy restore
+            Some(CliCommand::Save) => {
+                crate::persist::save_all_sessions(tmux);
+                Ok(SubCommandGiven::Yes)
+            }
+
+            // Internal: background interval-save loop
+            Some(CliCommand::SaveLoop) => {
+                crate::persist::run_save_loop(&config, tmux);
                 Ok(SubCommandGiven::Yes)
             }
 
@@ -483,6 +511,18 @@ fn config_command(cmd: &ConfigCommand, mut config: Config) -> Result<()> {
 
     if let Some(switch) = &args.clone_repo_switch {
         config.clone_repo_switch = Some(switch.to_owned());
+    }
+
+    if let Some(worktree_sessions) = args.worktree_sessions {
+        config.worktree_sessions = Some(worktree_sessions);
+    }
+
+    if let Some(lazy_restore) = args.lazy_restore {
+        config.lazy_restore = Some(lazy_restore);
+    }
+
+    if let Some(save_interval) = args.save_interval {
+        config.save_interval = Some(save_interval);
     }
 
     config.save().change_context(TmsError::ConfigError)?;
