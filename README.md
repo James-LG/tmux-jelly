@@ -1,22 +1,42 @@
-# tmux-sessionizer (jelly)
+# tmux-jelly
 
 The fastest way to manage projects as tmux sessions
 
-## What is tmux-sessionizer?
+## What is jelly?
 
-Tmux Sessionizer is a tmux session manager that is based on ThePrimeagen's
+`jelly` is a tmux session manager — a fast Rust TUI that fuzzy-finds the git
+repositories on your machine and opens each one as a tmux session. It is a fork of
+[`tmux-sessionizer`](https://github.com/jrmoulton/tmux-sessionizer) by jrmoulton,
+itself based on ThePrimeagen's
 [tmux-sessionizer](https://github.com/ThePrimeagen/.dotfiles/blob/master/bin/.local/scripts/tmux-sessionizer)
-but is opinionated and personalized to my specific tmux workflow. And it's awesome. Git worktrees
-are automatically opened as new windows, specific directories can be excluded, a default session can
-be set, killing a session jumps you to a default, and it is a goal to handle more edge case
-scenarios.
+script.
 
-Tmux has keybindings built-in to allow you to switch between sessions. By default, these are
-`leader-(` and `leader-)`
+Git worktrees can be opened as new windows, specific directories can be excluded, a
+default session can be set, and killing a session jumps you to a default.
 
-Switching between windows is done by default with `leader-p` and `leader-n`
+Tmux has keybindings built-in to allow you to switch between sessions. By default,
+these are `leader-(` and `leader-)`. Switching between windows is done by default
+with `leader-p` and `leader-n`.
 
 ![jelly-gif](images/tms-v0_1_1.gif)
+
+## What's different from tmux-sessionizer
+
+jelly is a drop-in fork — every new feature is behind a config toggle that defaults
+to off, so with nothing enabled jelly behaves identically to upstream
+`tmux-sessionizer`. Two opt-in features set it apart:
+
+**🪟 Worktree sessions** — `jelly config --worktree-sessions true` makes each git
+worktree appear in the picker as its own `[repo]-[branch]` session instead of a
+window inside the repo's session, so you can jump straight to a specific worktree.
+The repository still appears as a plain `[repo]` entry. ([details](#worktree-sessions))
+
+**💾 Native lazy session restore** — `jelly config --lazy-restore true` makes jelly
+save and restore tmux sessions on its own, with no tmux-resurrect or tmux-continuum
+plugins. It snapshots session layout (window names, pane working directories, pane
+layout) to `~/.local/state/jelly/sessions/` and recreates a session from its
+snapshot the moment you pick it — restoring just that one session, not everything.
+([details](#lazy-session-restore))
 
 ## Usage
 
@@ -250,20 +270,16 @@ Available actions are:
 
 ## Installation
 
-[![Packaging status](https://repology.org/badge/vertical-allrepos/tmux-sessionizer.svg)](https://repology.org/project/tmux-sessionizer/versions)
+jelly is built from source — clone the repository and install with cargo:
 
-### Pre-built binaries
+```sh
+git clone https://github.com/James-LG/tmux-jelly.git
+cd tmux-jelly
+cargo install --path . --force
+```
 
-Check the [releases page](https://github.com/jrmoulton/tmux-sessionizer/releases) for the latest
-pre-built binaries
-
-### Cargo
-
-Install with `cargo install tmux-sessionizer` or
-
-### From source
-
-Clone the repository and install using `cargo install --path . --force`
+This installs the `jelly` binary to `~/.cargo/bin`. To update later, pull the latest
+changes and rerun the `cargo install` command.
 
 ## Usage Notes
 
