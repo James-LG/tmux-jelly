@@ -9,6 +9,7 @@ pub mod persist;
 pub mod repos;
 pub mod session;
 pub mod tmux;
+pub mod usage;
 
 use configs::Config;
 use std::process;

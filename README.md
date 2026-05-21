@@ -92,6 +92,25 @@ input or just pressing enter aborts it.
 With `jelly config --session <name>` you can define to which session you will switch to after the
 kill.
 
+### The `jelly usage` command
+
+`jelly usage` opens a live TUI that charts resource usage **by session** and, within
+each session, the **processes** running inside it. The top pane is a bar chart with
+one bar per tmux session; the bottom pane breaks each session down into its
+processes, each with an inline bar showing its share of that session's usage.
+
+Usage is sampled by pairing every tmux pane with its root process and walking the
+process tree, so every program spawned inside a session's panes is attributed to
+that session. The sample refreshes every two seconds.
+
+- `c` / `m` (or `Tab`) — switch between charting CPU and memory
+- `↑` / `↓` — move the selection between sessions
+- `⏎` — switch to the highlighted session
+- `r` — refresh immediately, `q` — quit
+
+A config for use with `display-popup` could look like this
+`bind C-p display-popup -w 90% -h 90% -E "jelly usage"`.
+
 ### CLI overview
 
 Use `jelly --help`
@@ -108,6 +127,7 @@ Commands:
   windows       Display the current session's windows with a fuzzy finder and a preview window
   kill          Kill the current tmux session and jump to another
   sessions      Show running tmux sessions with asterisk on the current session
+  usage         Live chart of resource usage by session and the processes within each
   save          Snapshot all live tmux sessions so they can be lazily restored later
   rename        Rename the active session and the working directory
   refresh       Creates new worktree windows for the selected session

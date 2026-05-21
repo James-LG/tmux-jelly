@@ -47,6 +47,8 @@ pub enum CliCommand {
     Kill,
     /// Show running tmux sessions with asterisk on the current session
     Sessions,
+    /// Live chart of resource usage by session and the processes within each
+    Usage,
     /// Snapshot all live tmux sessions so they can be lazily restored later
     Save,
     /// Internal: background loop that snapshots sessions on an interval
@@ -235,6 +237,12 @@ impl Cli {
             // session
             Some(CliCommand::Sessions) => {
                 sessions_subcommand(tmux)?;
+                Ok(SubCommandGiven::Yes)
+            }
+
+            // Open the live resource-usage chart
+            Some(CliCommand::Usage) => {
+                crate::usage::usage_command(tmux)?;
                 Ok(SubCommandGiven::Yes)
             }
 
