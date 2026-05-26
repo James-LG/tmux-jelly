@@ -37,10 +37,24 @@ struct SavedSession {
 #[derive(Debug, Serialize, Deserialize)]
 struct SavedWindow {
     name: String,
+    /// `true` when this window's name was driven by tmux's `automatic-rename`
+    /// and should be re-derived on restore; `false` when it was a name the
+    /// user set explicitly and must survive verbatim.
+    ///
+    /// Defaults to `true` for snapshots written before the field existed —
+    /// guessing "auto" is the only safe default, since restoring a stale
+    /// auto-rename name as if it were manual is what locks every window to
+    /// whatever process happened to be running at save time.
+    #[serde(default = "default_true")]
+    automatic_rename: bool,
     /// The tmux `window_layout` string (encodes pane geometry).
     layout: String,
     /// Working directory of each pane, in pane-index order.
     panes: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -59,13 +73,15 @@ pub fn save_all_sessions(tmux: &Tmux) {
         return;
     }
 
-    let format = "#{session_name}\t#{window_index}\t#{window_name}\t#{window_layout}\t#{pane_index}\t#{pane_current_path}";
+    // `#{E:automatic-rename}` resolves the *effective* per-window option as
+    // `1`/`0` (tmux 3.6+). `#{pane_current_command}` lets us fall back to a
+    // heuristic when the option lies (see `compute_automatic_rename`).
+    let format = "#{session_name}\t#{window_index}\t#{window_name}\t#{window_layout}\t#{pane_index}\t#{pane_current_path}\t#{E:automatic-rename}\t#{pane_current_command}";
 
-    // session -> window_index -> (name, layout, pane_index -> path)
     let mut sessions: BTreeMap<String, BTreeMap<u32, WindowAcc>> = BTreeMap::new();
     for line in tmux.list_all_panes(format).lines() {
         let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() != 6 {
+        if fields.len() != 8 {
             continue;
         }
         let (Ok(window_index), Ok(pane_index)) =
@@ -80,9 +96,12 @@ pub fn save_all_sessions(tmux: &Tmux) {
             .or_insert_with(|| WindowAcc {
                 name: fields[2].to_string(),
                 layout: fields[3].to_string(),
+                auto_rename_option: fields[6] == "1",
                 panes: BTreeMap::new(),
+                pane_commands: Vec::new(),
             });
         window.panes.insert(pane_index, fields[5].to_string());
+        window.pane_commands.push(fields[7].to_string());
     }
 
     for (name, windows) in sessions {
@@ -91,6 +110,11 @@ pub fn save_all_sessions(tmux: &Tmux) {
             windows: windows
                 .into_values()
                 .map(|w| SavedWindow {
+                    automatic_rename: compute_automatic_rename(
+                        w.auto_rename_option,
+                        &w.name,
+                        &w.pane_commands,
+                    ),
                     name: w.name,
                     layout: w.layout,
                     panes: w.panes.into_values().collect(),
@@ -106,7 +130,26 @@ pub fn save_all_sessions(tmux: &Tmux) {
 struct WindowAcc {
     name: String,
     layout: String,
+    auto_rename_option: bool,
     panes: BTreeMap<u32, String>,
+    pane_commands: Vec<String>,
+}
+
+/// Decide whether a window's name should be treated as automatic-rename output.
+///
+/// The straightforward case is the tmux option: if `automatic-rename` is `on`
+/// for the window, the name is whatever the foreground command is right now,
+/// and we mustn't re-impose it on restore.
+///
+/// The subtle case is the recovery from jelly's own past mistake: older
+/// versions called `rename-window` on every restored window, which tmux treats
+/// as "the user has named this", flipping the per-window option to `off`. The
+/// resulting name still looks like an auto-rename name (e.g. matches `zsh`,
+/// `nvim`, …), so when it equals one of the panes' current foreground command
+/// we treat it as automatic. That breaks the lock-in loop without needing the
+/// user to reset anything by hand.
+fn compute_automatic_rename(option_on: bool, name: &str, pane_commands: &[String]) -> bool {
+    option_on || (!name.is_empty() && pane_commands.iter().any(|c| c == name))
 }
 
 // ---------------------------------------------------------------------------
@@ -144,13 +187,22 @@ fn restore_session(saved: &SavedSession, tmux: &Tmux) {
     for (index, window) in saved.windows.iter().enumerate() {
         let first_path = window.panes.first().and_then(|p| usable_dir(p));
 
+        // Only force a window name when the user had set one explicitly. For
+        // automatic-rename windows, letting tmux pick the initial name (and
+        // keep updating it) avoids permanently locking the name to whatever
+        // process was running at save time — both `rename-window` and
+        // `new-window -n` flip the per-window `automatic-rename` option to
+        // `off`, which is what produces the "stuck on 0: zsh" bug.
+        let explicit_name = (!window.automatic_rename && !window.name.is_empty())
+            .then_some(window.name.as_str());
+
         if index == 0 {
             tmux.new_session(Some(&saved.name), first_path);
-            if !window.name.is_empty() {
-                tmux.rename_window(&saved.name, &window.name);
+            if let Some(name) = explicit_name {
+                tmux.rename_window(&saved.name, name);
             }
         } else {
-            tmux.new_window(Some(&window.name), first_path, Some(&saved.name));
+            tmux.new_window(explicit_name, first_path, Some(&saved.name));
         }
 
         // `-t <session>` targets the session's current window — the one just created.
@@ -412,6 +464,7 @@ mod tests {
             name: "proj".to_string(),
             windows: vec![SavedWindow {
                 name: "main".to_string(),
+                automatic_rename: false,
                 layout: "abcd,80x24,0,0,0".to_string(),
                 panes: vec!["/home/u/proj".to_string()],
             }],
@@ -420,7 +473,49 @@ mod tests {
         let back: SavedSession = serde_json::from_str(&json).unwrap();
         assert_eq!(back.name, "proj");
         assert_eq!(back.windows.len(), 1);
+        assert!(!back.windows[0].automatic_rename);
         assert_eq!(back.windows[0].panes, vec!["/home/u/proj"]);
+    }
+
+    #[test]
+    fn legacy_snapshot_without_field_defaults_to_automatic_rename() {
+        // Snapshots written before the field existed shouldn't lock window
+        // names on restore — they have to default to "treat as auto-rename".
+        let json =
+            r#"{"name":"proj","windows":[{"name":"zsh","layout":"","panes":["/tmp"]}]}"#;
+        let back: SavedSession = serde_json::from_str(json).unwrap();
+        assert!(back.windows[0].automatic_rename);
+    }
+
+    #[test]
+    fn auto_rename_heuristic_trusts_the_tmux_option() {
+        // When tmux says `automatic-rename` is on, that's authoritative.
+        assert!(compute_automatic_rename(true, "anything", &[]));
+        assert!(compute_automatic_rename(true, "logs", &["zsh".into()]));
+    }
+
+    #[test]
+    fn auto_rename_heuristic_recovers_locked_loop_windows() {
+        // The window's option has been forced off, but its name still matches
+        // a foreground process — almost certainly leftover from an earlier
+        // restore that called rename-window. Treat as auto-rename so the next
+        // restore stops re-locking it.
+        assert!(compute_automatic_rename(
+            false,
+            "nvim",
+            &["zsh".to_string(), "nvim".to_string()],
+        ));
+    }
+
+    #[test]
+    fn auto_rename_heuristic_preserves_truly_manual_names() {
+        // No pane is running anything that matches "logs", so the name is
+        // genuinely user-set and must survive verbatim.
+        assert!(!compute_automatic_rename(
+            false,
+            "logs",
+            &["zsh".to_string(), "tail".to_string()],
+        ));
     }
 
     #[test]
